@@ -4,7 +4,7 @@ It won't work with v1.x motor shields! Only for the v2's with built in PWM
 control
 
 For use with the Adafruit Motor Shield v2 
----->	http://www.adafruit.com/products/1438
+----> http://www.adafruit.com/products/1438
 */
 
 
@@ -32,6 +32,8 @@ int c = 0; // byte received on the serial port
 uint8_t mode = INTERLEAVE;
 int speedDelay = 0;
 
+float xTail = 0;
+float yTail = 0;
 
 void setup() {
     Serial.begin(9600);           // set up Serial library at 9600 bps
@@ -121,8 +123,8 @@ void processCommand( char command, float* params ) {
         float xSteps = params[0];
         float ySteps = params[1];
         Serial.println("BUSY");  
-        lineBy(xSteps, ySteps);
-        lineDebug(xSteps, ySteps);
+        lineBy(xSteps, ySteps);        
+        delay(200);
         Serial.println("IDLE");
       }
       break;
@@ -136,6 +138,7 @@ void processCommand( char command, float* params ) {
         if(params[4] == 0) dirCW = false;        
         Serial.println("BUSY");  
         arc(centerX, centerY, endX, endY, dirCW);
+        delay(200);
         Serial.println("IDLE");
       }
       break;      
@@ -173,30 +176,33 @@ void penUp() {
 }
 
 void penDown() {
-  servo.write(76);
+  servo.write(70);
   delay(200);
-  speedDelay = 10;
+  speedDelay = 7;
   mode = DOUBLE;
 }
 
 void lineDebug(float x, float y) {
-  /*
   Serial.print("D:");
   Serial.print(x);
   Serial.print(":");
-  Serial.println(y);*/
+  Serial.println(y);
 }
 
 void lineByMicro(float xSteps, float ySteps) {   
-  lineAlgorythm(xSteps*16.0, ySteps*16.0, MICROSTEP);
+  lineAlgorythm(xSteps*MICROSTEPS, ySteps*MICROSTEPS, MICROSTEP);
 }
 
 void lineByDouble(int xSteps, float ySteps) {
   lineAlgorythm(xSteps, ySteps, DOUBLE);
 }
 
-void lineAlgorythm(int xSteps, int ySteps, uint8_t mode_override) {  
+void lineAlgorythm(float x, float y, uint8_t mode_override) {  
+  int xSteps = round(x);
+  int ySteps = round(y);
   if(xSteps == 0 && ySteps == 0) return;
+
+  //lineDebug(x, y);
   
   uint8_t dirX = BACKWARD;
   uint8_t dirY = FORWARD;
@@ -225,11 +231,13 @@ void lineAlgorythm(int xSteps, int ySteps, uint8_t mode_override) {
       dr+=minStep;      
       if(dr >= 1) {
         myMotorY->onestep(dirY, mode_override);
+        //lineDebug(0, dirMulY);
         dr = dr - 1.0;
       } else {
         
       }
       myMotorX->onestep(dirX, mode_override);
+      //lineDebug(dirMulX, 0);
       if(mode == DOUBLE) {
         delay(speedDelay);
       }
@@ -240,7 +248,7 @@ void lineAlgorythm(int xSteps, int ySteps, uint8_t mode_override) {
     for(int i = 0; i < ySteps; i++) { 
       dr+=minStep;      
       if(dr >= 1) {
-        myMotorX->onestep(dirX*FORWARD, mode_override);
+        myMotorX->onestep(dirX, mode_override);
         dr = dr - 1.0;
       } else {
         
@@ -258,19 +266,54 @@ void lineByInterleave(float xSteps, float ySteps) {
 }
 
 void lineBy(float xSteps, float ySteps) { 
-  int intX = (int)xSteps;
-  int intY = (int)ySteps;
+  int intX = round(xSteps);
+  int intY = round(ySteps);
   
   float floatX = xSteps-intX;
   float floatY = ySteps-intY;
+
+  if(xTail >= 1) {
+    intX++;
+    xTail = 0;
+  }
+  if(xTail <= -1) {
+    intX--;
+    xTail = 0;
+  }
+  if(yTail >= 1) {
+    intY++;
+    yTail = 0;
+  }
+  if(yTail <= -1) {
+    intY--;
+    yTail = 0;
+  }
   
   if(intX != 0 || intY != 0) {
-    lineByDouble(intX, intY);
+    lineByInterleave(intX, intY);
   }
 
   if(floatX != 0 || floatY != 0) {
-    lineByMicro(floatX, floatY);
+    xTail += floatX;
+    yTail += floatY;
   }
+}
+
+void lineByForArc(float xSteps, float ySteps) {
+  int oldSpeed = speedDelay;
+  speedDelay = 0;
+  lineByMicro(xSteps, ySteps);
+  speedDelay = oldSpeed;
+  
+  /*
+  if(abs(xSteps) < 20 || abs(ySteps) < 20) {
+    lineByMicro(xSteps, ySteps);
+  } else if(abs(xSteps) < 50 || abs(ySteps) < 50) {
+    lineByInterleave(xSteps, ySteps);
+  } else {
+    lineByDouble(round(xSteps), round(ySteps));
+  }*/
+  
 }
 
 
@@ -279,12 +322,16 @@ void lineBy(float xSteps, float ySteps) {
  * endX and endY are relative to current position
  */
 void arc(float centerX, float centerY, float endX, float endY, boolean CW) {
-  float CM_PER_SEGMENT = 5.0;
+  float CM_PER_SEGMENT = 10.0;
 
   int oldDelay = speedDelay;
 
   // get radius
   float radius=sqrt(centerX*centerX+centerY*centerY);
+
+  if(radius < 20) {
+    CM_PER_SEGMENT = 4.0;
+  }
 
   // find the sweep of the arc
   float angle1 = atan3(-centerX, -centerY);
@@ -318,13 +365,11 @@ void arc(float centerX, float centerY, float endX, float endY, boolean CW) {
 
     currY=(centerY + sin(angle3) * radius);
 
-    lineByMicro(nx,ny);
-    lineDebug(nx, ny);
+    lineByForArc(nx,ny);
   }
 
   // one last line hit the end
-  lineByMicro(endX-currX,endY-currY);
-  lineDebug(endX-currX,endY-currY);
+  lineByForArc(endX-currX,endY-currY);
 
   speedDelay = oldDelay;
 }
